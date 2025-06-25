@@ -1,107 +1,144 @@
-#!/usr/bin/env python3
-"""
-영어 유창성 분석 실행 스크립트
+# ----------------------------------------------------------------------------------------------------
+# 작성목적 : API 요청 기반 실시간 영어 능력 분석
+# 작성일 : 2025-06-27
 
-사용법:
-    python run_analysis.py --user_id test_user --question_num 8
-    python run_analysis.py --user_id test_user --question_num 9
-"""
+# 변경사항 내역 (날짜 | 변경목적 | 변경내용 | 작성자 순으로 기입)
+# 2025-06-27 | API 서버로 재구성 | 영상 분석 서버 구조를 적용하여 API 기반 실시간 처리 방식으로 재작성 | 구동빈
+# ----------------------------------------------------------------------------------------------------
 
-import asyncio
-import argparse
+import uvicorn
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 import sys
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+import os
+import tempfile
+import shutil
+from datetime import datetime
 
-# .env 파일 로드
-load_dotenv()
-
-# 프로젝트 루트를 파이썬 패스에 추가
-project_root = Path(__file__).parent
+# --- 경로 설정 및 모듈 임포트 ---
+project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
 
-from services.english_analyzer import EnglishAnalyzer
-from services.s3_service import S3Service
+load_dotenv()
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+from utils.s3_handler import S3Handler
+# 'EnglishAnalyzer'의 실제 위치에 따라 경로를 맞춰야 합니다.
+from services.english_analyzer import EnglishAnalyzer
+
+# --- 로깅 설정 ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- Pydantic 모델 정의 ---
+class AnalysisPayload(BaseModel):
+    s3ObjectKey: str
+
+class AnalysisResponse(BaseModel):
+    analysis_id: str
+    status: str
+    message: str
+
+# --- FastAPI 애플리케이션 생성 ---
+app = FastAPI(
+    title="영어 능력 분석 API",
+    description="메인 서버로부터 S3 Object Key를 받아 영어 능력 분석을 수행합니다."
 )
 
-async def analyze_single_task(user_id: str, question_num: int, task_num: int, total_tasks: int):
-    """단일 분석 작업 실행"""
-    print(f"\n🔄 [{task_num}/{total_tasks}] 사용자 {user_id}, 질문 {question_num} 분석 시작...")
+# --- 유틸리티 함수 ---
+def parse_s3_key(s3_key: str) -> tuple[str, str]:
+    """
+    S3 Object Key에서 user_id와 question_num을 추출합니다.
+    예상 키 형식: 'team12/interview_audio/{user_id}/{question_num}/{filename}'
+    """
+    try:
+        parts = Path(s3_key).parts
+        # 경로 구조 예: ('team12', 'interview_audio', '2', '2', 'TalkFile.wav')
+        if len(parts) < 4 or parts[0].lower() != 'team12' or parts[1].lower() != 'interview_audio':
+             raise ValueError("잘못된 S3 키 구조")
+        
+        user_id = parts[2]
+        question_num = parts[3]
+        
+        return user_id, question_num
+    except (IndexError, ValueError) as e:
+        logger.error(f"S3 키 형식 분석 실패: {s3_key}. 예상 형식: 'team12/interview_audio/{{user_id}}/{{question_num}}/filename' - {e}")
+        raise ValueError(f"잘못된 S3 키 형식입니다: {s3_key}")
+
+# --- 백그라운드 처리 함수 ---
+async def process_english_analysis_from_s3(background_tasks: BackgroundTasks, s3_key: str):
+    """S3 키를 받아 영어 분석을 비동기적으로 처리하는 함수"""
+    background_tasks.add_task(run_analysis_in_background, s3_key)
+    return {"message": "English analysis has been started in the background."}
+
+async def run_analysis_in_background(s3_key: str):
+    """백그라운드에서 실제 분석을 실행하는 함수"""
+    logger.info(f"Received S3 key for analysis: {s3_key}")
+    s3_handler = S3Handler()
     
-    analyzer = EnglishAnalyzer()
+    # s3_key에서 정보 파싱
     try:
-        await analyzer.analyze_audio_async(user_id, question_num)
-        print(f"✅ [{task_num}/{total_tasks}] 사용자 {user_id}, 질문 {question_num} 분석 완료!")
-    except Exception as e:
-        print(f"❌ [{task_num}/{total_tasks}] 사용자 {user_id}, 질문 {question_num} 분석 실패: {str(e)}")
+        # "team12/interview_audio/{user_id}/{question_num}/{filename}"
+        parts = s3_key.split('/')
+        user_id = parts[2]
+        question_num = int(parts[3])
+        filename = parts[4]
+        logger.info(f"Parsed info: user_id={user_id}, question_num={question_num}, filename={filename}")
+    except (IndexError, ValueError) as e:
+        logger.error(f"Failed to parse S3 key '{s3_key}'. Error: {e}", exc_info=True)
+        return
 
-async def main():
-    """메인 실행 함수 - 배치 처리 최적화"""
-    try:
-        print("\n🚀 영어 분석 스크립트 시작 (배치 처리 모드)")
-        print(f"   작업 디렉터리: {Path.cwd()}")
-        
-        # S3 서비스 초기화
-        s3_service = S3Service()
-        
-        # S3에서 사용자 목록 가져오기
-        print("   📋 S3에서 모든 사용자 목록 가져오는 중...")
-        users = s3_service.list_all_users()
-        print(f"   발견된 사용자: {len(users)}명 - {', '.join(map(str, users))}")
-        
-        # 분석할 질문 번호
-        questions = [8, 9]
-        print(f"   분석할 질문 번호: {', '.join(map(str, questions))}")
-        
-        # 분석 작업 목록 생성
-        task_details = []
-        
-        for user_id in users:
-            # 사용자가 가진 질문 파일들 확인
-            available_questions = s3_service.get_user_questions(user_id, questions)
-            for question_num in available_questions:
-                task_details.append((user_id, question_num))
-        
-        if not task_details:
-            print("   ⚠️ 분석할 파일이 없습니다.")
-            return
-        
-        print(f"\n📊 총 {len(task_details)}개의 분석 작업을 배치 처리합니다:")
-        for i, (user_id, question_num) in enumerate(task_details, 1):
-            print(f"   {i}. 사용자 {user_id}, 질문 {question_num}")
-        
-        # 영어 분석기 초기화
-        analyzer = EnglishAnalyzer()
-        
-        # 1단계: 모든 오디오 파일 다운로드 및 변환
-        print(f"\n🔄 1단계: 모든 오디오 파일 다운로드 및 변환 중...")
-        for i, (user_id, question_num) in enumerate(task_details, 1):
-            print(f"   [{i}/{len(task_details)}] 사용자 {user_id}, 질문 {question_num} 파일 준비 중...")
-            await analyzer.prepare_audio_file(user_id, question_num)
-        
-        # 2단계: PLSPP MFA 배치 분석 (한 번만 실행)
-        print(f"\n🔬 2단계: PLSPP MFA 배치 분석 실행 중...")
-        await analyzer.run_batch_plspp_analysis()
-        
-        # 3단계: 각 사용자/질문별 개별 분석 및 저장
-        print(f"\n📊 3단계: 개별 분석 및 데이터베이스 저장 중...")
-        for i, (user_id, question_num) in enumerate(task_details, 1):
-            print(f"   [{i}/{len(task_details)}] 사용자 {user_id}, 질문 {question_num} 분석 중...")
-            await analyzer.analyze_individual_result(user_id, question_num)
-        
-        print(f"\n🎉 모든 분석 작업이 완료되었습니다! (총 {len(task_details)}개)")
-        
-    except Exception as e:
-        print(f"\n❌ 분석 실행 중 오류 발생: {str(e)}")
-        import traceback
-        traceback.print_exc()
+    # 분석을 위한 임시 작업 디렉토리 생성
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        try:
+            # 1. S3에서 파일 다운로드
+            logger.info(f"Downloading {s3_key} from S3 to {temp_dir_path}...")
+            local_audio_path = await s3_handler.download_file(s3_key, str(temp_dir_path))
+            
+            if not local_audio_path:
+                logger.error(f"Failed to download file from S3 for key: {s3_key}")
+                return
+            
+            logger.info(f"File downloaded successfully to: {local_audio_path}")
+            
+            # 2. 리팩토링된 Analyzer를 사용하여 분석 실행
+            logger.info("Initializing EnglishAnalyzer...")
+            # Analyzer에 user_id, question_num과 함께 작업 디렉토리(base_path)를 전달
+            analyzer = EnglishAnalyzer(
+                user_id=user_id, 
+                question_num=question_num, 
+                base_path=str(temp_dir_path)
+            )
+            
+            logger.info(f"Starting analysis for {local_audio_path}...")
+            # 다운로드한 파일 경로를 analyze 메서드에 전달
+            await analyzer.analyze(local_audio_path)
+            
+            logger.info(f"Successfully completed analysis for S3 key: {s3_key}")
 
+        except Exception as e:
+            logger.error(f"An error occurred during the analysis for S3 key '{s3_key}'. Error: {e}", exc_info=True)
+        finally:
+            logger.info(f"Cleaning up temporary directory: {temp_dir_path}")
+            # 'with' 구문이 끝나면 temp_dir은 자동으로 삭제됩니다.
+
+# --- API 엔드포인트 ---
+@app.post("/analysis/english")
+async def request_english_analysis(
+    request: AnalysisPayload,
+    background_tasks: BackgroundTasks,
+):
+    """영어 면접 답변에 대한 분석을 요청하는 엔드포인트 (s3ObjectKey 사용)"""
+    logger.info(f"Received english analysis request for S3 key: {request.s3ObjectKey}")
+    return await process_english_analysis_from_s3(background_tasks, request.s3ObjectKey)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "message": "English Analysis API is running."}
+
+# --- 서버 실행 ---
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    uvicorn.run(app, host="0.0.0.0", port=8003) 
