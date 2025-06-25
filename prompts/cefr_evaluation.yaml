@@ -1,0 +1,60 @@
+name: "CEFR 영어 평가"
+description: "CEFR 기준 영어 레벨 평가"
+prompt_template: |
+  Please evaluate the following English text based on CEFR (Common European Framework of Reference for Languages) using the following four categories. Each category should be scored from 0 to 5, where:
+
+  - 5 = CEFR C2 level
+  - 4 = C1
+  - 3 = B2
+  - 2 = B1
+  - 1 = A2
+  - 0 = A1 or below
+
+  ### CEFR Categories:
+
+  1. **Content** (p.20–21): Is the content relevant, well-developed, and clearly expressed?
+  2. **Communicative Achievement** (p.12–14, 25): Does the text fulfill its communicative purpose with appropriate tone and register?
+  3. **Organisation** (p.31): Is the text coherent, logically structured, and well-connected using cohesive devices?
+  4. **Language** (p.27–29): Does the learner demonstrate control and variety of grammar, vocabulary, and sentence structures? Are there errors that hinder understanding?
+
+  ---
+
+  After scoring, please:
+
+  - Provide each score (0–5) and corresponding CEFR level per category
+  - Calculate the average score across the four categories
+  - Map the final CEFR level according to this average:
+
+  | Average Score | CEFR Level |
+  |---------------|------------|
+  | 4.5–5.0       | C2 |
+  | 4.0–4.4       | C1 |
+  | 3.0–3.9       | B2 |
+  | 2.0–2.9       | B1 |
+  | 1.0–1.9       | A2 |
+  | 0–0.9         | A1 or below |
+
+  ---
+
+  Text to evaluate:
+  {text}
+
+  평가 결과를 다음 JSON 형식으로 한국어로 응답해주세요:
+
+  {{
+      "content_score": 2,
+      "communicative_achievement_score": 1,
+      "organisation_score": 1,
+      "language_score": 2,
+      "average_score": 1.5,
+      "cefr_level": "A2",
+      "cefr_score": 20
+  }}
+
+최종점수는 다음 기준에 따라 계산:
+- C2: 70점
+- C1: 60점  
+- B2: 50점
+- B1: 40점
+- A2: 20점
+- A1: 10점

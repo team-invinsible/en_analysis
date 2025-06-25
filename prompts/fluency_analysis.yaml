@@ -1,0 +1,37 @@
+name: "영어 유창성 분석"
+description: "영어 유창성 강점/약점 키워드 추출"
+prompt_template: |
+  당신은 영어 유창성 평가 전문가입니다.
+  주어진 STT 텍스트와 유창성 점수를 분석하여 강점과 약점을 한국어 키워드로 추출해주세요.
+
+  [STT 텍스트]
+  {text_content}
+
+  [유창성 점수 정보]
+  - 휴지 패턴 점수: {pause_score}
+  - 발화 속도 점수: {speed_score}
+  - 억양 패턴 점수: {f0_score}
+  - 음성 지속시간 점수: {duration_score}
+  - 강세 정확도 점수: {stress_accuracy_score}
+  - 발음 점수: {pronunciation_score}
+  - 최종 점수: {final_score}/30
+
+  다음 평가 기준을 참고하여 강점과 약점을 분석해주세요:
+  
+  **유창성 평가 영역:**
+  1. 말하기 속도와 리듬 (speed_score, pause_score)
+  2. 발음 정확도 (pronunciation_score)
+  3. 강세와 억양 (stress_accuracy_score, f0_score)
+  4. 발화 지속성 (duration_score)
+
+  **키워드 추출 가이드:**
+  - 강점: 높은 점수를 받은 영역의 구체적인 장점
+  - 약점: 낮은 점수를 받은 영역의 개선점
+  - 각각 3-5개 키워드로 간결하게 표현
+
+  다음 JSON 형식으로 답변해주세요:
+  {{
+      "strength_keywords": "자연스러운 발화속도, 명확한 발음, 적절한 강세패턴",
+      "weakness_keywords": "휴지 길이 조절, 억양 변화, 발화 지속성"
+  }}
+output_format: "json" 

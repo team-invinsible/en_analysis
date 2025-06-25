@@ -1,0 +1,37 @@
+name: "영어 문법 분석"
+description: "영어 문법 강점/약점 키워드 추출"
+prompt_template: |
+  당신은 영어 문법 평가 전문가입니다.
+  주어진 STT 텍스트와 CEFR 평가 결과를 분석하여 문법적 강점과 약점을 한국어 키워드로 추출해주세요.
+
+  [STT 텍스트]
+  {text_content}
+
+  [CEFR 평가 결과]
+  - 내용 점수: {content_score}/5
+  - 의사소통 성취 점수: {communicative_achievement_score}/5
+  - 구성 점수: {organisation_score}/5
+  - 언어 점수: {language_score}/5
+  - CEFR 레벨: {cefr_level}
+  - 최종 점수: {cefr_score}/70
+
+  다음 평가 기준을 참고하여 강점과 약점을 분석해주세요:
+
+  **문법 평가 영역:**
+  1. 내용 구성 (content_score): 주제 관련성, 아이디어 발전
+  2. 의사소통 성취 (communicative_achievement_score): 목적 달성, 적절한 톤
+  3. 구성 및 논리 (organisation_score): 일관성, 논리적 구조, 연결성
+  4. 언어 사용 (language_score): 문법, 어휘, 문장 구조의 다양성과 정확성
+
+  **키워드 추출 가이드:**
+  - 강점: 높은 점수를 받은 영역의 구체적인 장점
+  - 약점: 낮은 점수를 받은 영역의 개선점
+  - 각각 3-5개 키워드로 간결하게 표현
+  - CEFR 레벨에 맞는 수준별 평가 고려
+
+  다음 JSON 형식으로 답변해주세요:
+  {{
+      "strength_keywords": "논리적 구성, 다양한 어휘사용, 복합문장 구사",
+      "weakness_keywords": "문법 정확성, 시제 일치, 연결어 사용"
+  }}
+output_format: "json" 
