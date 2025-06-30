@@ -12,10 +12,10 @@ prompt_template: |
 
   ### CEFR Categories:
 
-  1. **Content** (p.20–21): Is the content relevant, well-developed, and clearly expressed?
-  2. **Communicative Achievement** (p.12–14, 25): Does the text fulfill its communicative purpose with appropriate tone and register?
-  3. **Organisation** (p.31): Is the text coherent, logically structured, and well-connected using cohesive devices?
-  4. **Language** (p.27–29): Does the learner demonstrate control and variety of grammar, vocabulary, and sentence structures? Are there errors that hinder understanding?
+  1. **Content** : Is the content relevant, well-developed, and clearly expressed?
+  2. **Communicative Achievement** : Does the text fulfill its communicative purpose with appropriate tone and register?
+  3. **Organisation** : Is the text coherent, logically structured, and well-connected using cohesive devices?
+  4. **Language** : Does the learner demonstrate control and variety of grammar, vocabulary, and sentence structures? Are there errors that hinder understanding?
 
   ---
 
@@ -48,13 +48,21 @@ prompt_template: |
       "language_score": 2,
       "average_score": 1.5,
       "cefr_level": "A2",
-      "cefr_score": 20
+      "cefr_score": 10
   }}
 
-최종점수는 다음 기준에 따라 계산:
-- C2: 70점
-- C1: 60점  
-- B2: 50점
-- B1: 40점
-- A2: 20점
-- A1: 10점
+  **중요: 최종 점수는 반드시 다음 기준표의 정확한 점수만 사용하세요. 중간값이나 임의 점수는 절대 사용하지 마세요:**
+  
+  | CEFR Level | 정확한 점수 |
+  |------------|------------|
+  | C2 | 70점 |
+  | C1 | 60점 |
+  | B2 | 50점 |
+  | B1 | 20점 |
+  | A2 | 10점 |
+  | A1 | 0점 |
+
+  **주의사항:**
+  - cefr_score는 위 표의 정확한 점수만 사용 (17.5점, 35점 등 중간값 금지)
+  - CEFR 레벨에 따라 정해진 점수만 출력
+  - 평균 점수와 레벨 매핑을 정확히 따를 것
