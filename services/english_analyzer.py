@@ -18,191 +18,116 @@ logger = logging.getLogger(__name__)
 class EnglishAnalyzer:
     """영어 유창성 분석 클래스"""
     
-    def __init__(self):
+    def __init__(self, user_id: str, question_num: int, base_path: str):
+        """
+        분석기 초기화.
+        :param user_id: 사용자 ID
+        :param question_num: 질문 번호
+        :param base_path: 모든 분석 작업이 이루어질 기본 임시 디렉토리 경로
+        """
+        self.user_id = user_id
+        self.question_num = question_num
+        self.base_path = Path(base_path)
+
         self.s3_service = S3Service()
         self.gpt_service = GPTService()
-        self.db_manager = None  # 비동기로 초기화
+        self.db_manager = None
         self.audio_processor = AudioProcessor()
         
-        # 프로젝트 루트 경로 설정
+        # PLSPP 관련 디렉토리 구조를 base_path 내에 동적으로 생성
         self.project_root = Path(__file__).parent.parent
-        self.plspp_dir = self.project_root / "plspp"
+        self.original_plspp_dir = self.project_root / "plspp" # 원본 위치
+        self.plspp_dir = self.base_path / "plspp"             # 작업용 복사본 위치
         self.audio_dir = self.plspp_dir / "audio"
         self.text_dir = self.plspp_dir / "text"
         
-        # 디렉터리 생성
-        self.audio_dir.mkdir(exist_ok=True)
-        self.text_dir.mkdir(exist_ok=True)
-    
-    async def analyze_audio_async(self, user_id: str, question_num: int):
-        """비동기 오디오 분석 메인 함수"""
+        # 작업용 디렉토리 생성
+        self.audio_dir.mkdir(parents=True, exist_ok=True)
+        self.text_dir.mkdir(parents=True, exist_ok=True)
+
+        # 원본 plspp 파일을 작업 디렉토리로 복사
+        if not (self.plspp_dir / "plspp_mfa.sh").exists():
+            shutil.copytree(self.original_plspp_dir, self.plspp_dir, dirs_exist_ok=True)
+
+    async def analyze(self, audio_file_path: str):
+        """
+        오디오 파일 분석 메인 함수. S3 다운로드는 외부에서 처리.
+        :param audio_file_path: 분석할 오디오 파일의 로컬 경로
+        """
         try:
-            # 8, 9번 질문만 처리
-            if question_num not in [8, 9]:
-                logger.warning(f"영어 분석은 8, 9번 질문만 지원합니다. 입력된 질문 번호: {question_num}")
+            if self.question_num not in [8, 9]:
+                logger.warning(f"영어 분석은 8, 9번 질문만 지원합니다. 입력된 질문 번호: {self.question_num}")
                 return
             
-            # 데이터베이스 관리자 초기화
             if self.db_manager is None:
                 self.db_manager = await get_db_manager()
             
-            print(f"\n🎯 [영어 분석 시작] 사용자: {user_id}, 질문: {question_num}")
-            print("=" * 60)
-            logger.info(f"사용자 {user_id}, 질문 {question_num} 분석 시작")
+            logger.info(f"사용자 {self.user_id}, 질문 {self.question_num} 분석 시작")
             
-            # 1. S3에서 오디오 파일 다운로드
-            print("📥 단계 1/9: S3에서 음성 파일 다운로드 중...")
-            audio_file_path = await self._download_audio_from_s3(user_id, question_num)
-            print(f"✅ S3 다운로드 완료: {Path(audio_file_path).name}")
+            # 1. 오디오 파일 변환 (S3 다운로드 단계 제거)
+            wav_file_path = await self._convert_audio_to_wav(audio_file_path)
             
-            # 2. 오디오 파일 변환 (webm -> wav)
-            print("\n🎵 단계 2/9: 음성 파일 형식 변환 (webm → wav)...")
-            wav_file_path = await self._convert_audio_to_wav(audio_file_path, user_id, question_num)
-            print(f"✅ 파일 변환 완료: {Path(wav_file_path).name}")
+            # 2. PLSPP MFA 분석 실행
+            await self._run_plspp_analysis(wav_file_path)
             
-            # 3. PLSPP MFA 분석 실행
-            print("\n🔬 단계 3/9: PLSPP MFA 음성 분석 실행 중...")
-            print("   - 음성 세그멘테이션 및 정렬")
-            print("   - 발음 특성 추출")
-            print("   - CSV 결과 파일 생성")
-            await self._run_plspp_analysis(wav_file_path, user_id, question_num)
-            print("✅ PLSPP MFA 분석 완료")
+            # 3. 유창성 평가 실행
+            fluency_scores = await self._run_fluency_evaluation()
             
-            # 4. 유창성 평가 실행
-            print("\n📊 단계 4/9: 영어 유창성 평가 실행 중...")
-            print("   - 말 속도 분석")
-            print("   - 휴지 패턴 분석")
-            print("   - 강세 정확도 평가")
-            print("   - 발음 정확도 평가")
-            fluency_scores = await self._run_fluency_evaluation(user_id, question_num)
-            print(f"✅ 유창성 평가 완료 (최종 점수: {fluency_scores.get('final_score', 0):.2f}/30)")
+            # 4. STT 텍스트 추출 및 CEFR 문법 평가
+            cefr_scores = await self._run_cefr_evaluation()
             
-            # 5. STT 텍스트 추출 및 CEFR 문법 평가
-            print("\n🤖 단계 5/9: CEFR 영어 문법 평가 실행 중...")
-            print("   - STT 텍스트 분석")
-            print("   - 문법 구조 평가")
-            print("   - CEFR 레벨 판정")
-            cefr_scores = await self._run_cefr_evaluation(user_id, question_num)
-            print(f"✅ CEFR 평가 완료 (레벨: {cefr_scores.get('cefr_level', 'N/A')}, 점수: {cefr_scores.get('cefr_score', 0)}/70)")
+            # 5. STT 텍스트 추출
+            text_content = await self._extract_stt_text()
             
-            # 6. STT 텍스트 추출
-            print("\n📝 단계 6/9: STT 텍스트 추출 중...")
-            text_content = await self._extract_stt_text(user_id, question_num)
-            print("✅ STT 텍스트 추출 완료")
-            
-            # 7. GPT 분석 (요약, 키워드 추출) - 병렬 처리
-            print("\n🧠 단계 7/9: GPT 분석 실행 중...")
+            # 6. GPT 분석
             ans_summary, fluency_keywords, grammar_keywords = await self._run_gpt_analysis(
                 text_content, fluency_scores, cefr_scores
             )
-            print("✅ GPT 분석 완료")
             
-            # 8. 새로운 테이블 구조로 저장
-            print("\n💾 단계 8/9: 새 테이블 구조로 결과 저장 중...")
-            await self._save_to_new_tables(user_id, question_num, ans_summary, 
-                                          fluency_scores, cefr_scores, 
+            # 7. 결과 저장
+            await self._save_to_new_tables(ans_summary, fluency_scores, cefr_scores, 
                                           fluency_keywords, grammar_keywords)
-            print("✅ 새 테이블 구조 저장 완료")
             
-            # 9. MongoDB에 상세 결과 저장
-            print("\n🗃️ 단계 9/9: MongoDB에 상세 분석 결과 저장 중...")
-            await self._save_to_mongodb(user_id, question_num, fluency_scores, cefr_scores, 
-                                      text_content, ans_summary, fluency_keywords, grammar_keywords)
-            print("✅ MongoDB 저장 완료")
+            # 8. MongoDB에 상세 결과 저장
+            await self._save_to_mongodb(fluency_scores, cefr_scores, text_content, 
+                                      ans_summary, fluency_keywords, grammar_keywords)
             
-            # 임시 파일 정리
-            await self._cleanup_temp_files(user_id, question_num)
-            
-            print("\n" + "=" * 60)
-            print(f"🎉 [분석 완료] 사용자 {user_id}, 질문 {question_num} 분석이 성공적으로 완료되었습니다!")
-            print(f"📈 영어 유창성 점수: {fluency_scores.get('final_score', 0):.2f}/30")
-            print(f"📝 영어 문법 점수: {cefr_scores.get('cefr_score', 0)}/70")
-            print(f"🏆 총점: {fluency_scores.get('final_score', 0) + cefr_scores.get('cefr_score', 0)}/100")
-            print("=" * 60 + "\n")
-            
-            logger.info(f"사용자 {user_id}, 질문 {question_num} 분석 완료")
+            logger.info(f"사용자 {self.user_id}, 질문 {self.question_num} 분석 완료")
             
         except Exception as e:
-            print(f"\n❌ [분석 실패] 오류 발생: {str(e)}")
-            print("=" * 60 + "\n")
-            logger.error(f"분석 중 오류 발생: {str(e)}")
+            logger.error(f"분석 중 오류 발생: {str(e)}", exc_info=True)
             raise
     
-    async def _download_audio_from_s3(self, user_id: str, question_num: int) -> str:
-        """S3에서 오디오 파일 다운로드"""
+    async def _convert_audio_to_wav(self, audio_file_path: str) -> str:
+        """오디오 파일을 WAV 형식으로 변환하고 표준화된 이름으로 변경"""
         try:
-            # S3 경로: skala25a/team12/interview_audio/{userId}/{question_num}
-            s3_key = f"team12/interview_audio/{user_id}/{question_num}"
-            print(f"   - S3 경로: s3://skala25a/{s3_key}")
-            
-            # 다운로드할 로컬 경로
-            local_file_path = self.audio_dir / f"{user_id}_{question_num}_original"
-            print(f"   - 로컬 저장 경로: {local_file_path}")
-            
-            # S3에서 파일 다운로드 (비동기 처리)
-            import asyncio
-            loop = asyncio.get_event_loop()
-            downloaded_file = await loop.run_in_executor(
-                None, 
-                self.s3_service.download_audio_file,
-                user_id, question_num, str(self.audio_dir)
+            # 1. 오디오 변환 (AudioProcessor는 입력 파일명 기반으로 .wav를 생성)
+            temp_converted_file = await self.audio_processor.convert_to_wav(
+                input_file=audio_file_path,
+                output_dir=str(self.audio_dir)
             )
+
+            if not temp_converted_file:
+                raise Exception("오디오 파일 변환에 실패했습니다.")
+
+            # 2. 변환된 파일의 이름을 표준 형식으로 변경
+            # 예: "en_j.wav" -> "2_8.wav"
+            final_wav_name = f"{self.user_id}_{self.question_num}.wav"
+            final_wav_path = self.audio_dir / final_wav_name
+
+            # 만약 변환된 파일 경로가 최종 경로와 다르다면 이름 변경
+            if str(final_wav_path) != temp_converted_file:
+                shutil.move(temp_converted_file, final_wav_path)
             
-            if not downloaded_file:
-                # 테스트용: 로컬 테스트 파일 사용
-                test_file = self.audio_dir / "english.wav"
-                if test_file.exists():
-                    print(f"   ⚠️ S3 파일을 찾을 수 없어 테스트 파일 사용: {test_file}")
-                    logger.warning(f"S3 파일을 찾을 수 없어 테스트 파일 사용: {test_file}")
-                    return str(test_file)
-                else:
-                    logger.error("S3에서 파일을 다운로드할 수 없고, 테스트 파일도 없습니다.")
-                    raise Exception("오디오 파일을 찾을 수 없습니다.")
-            
-            logger.info(f"S3에서 파일 다운로드 완료: {downloaded_file}")
-            return downloaded_file
-            
-        except Exception as e:
-            print(f"   ❌ S3 다운로드 실패: {str(e)}")
-            logger.error(f"S3 다운로드 실패: {str(e)}")
-            
-            # 테스트용: 로컬 테스트 파일 사용
-            test_file = self.audio_dir / "english.wav"
-            if test_file.exists():
-                print(f"   ⚠️ 예외 발생으로 테스트 파일 사용: {test_file}")
-                logger.warning(f"예외 발생으로 테스트 파일 사용: {test_file}")
-                return str(test_file)
-            
-            raise
-    
-    async def _convert_audio_to_wav(self, audio_file_path: str, user_id: str, question_num: int) -> str:
-        """오디오 파일을 WAV 형식으로 변환"""
-        try:
-            output_path = self.audio_dir / f"{user_id}_{question_num}.wav"
-            print(f"   - 입력 파일: {Path(audio_file_path).name}")
-            print(f"   - 출력 파일: {output_path.name}")
-            
-            # 이미 WAV 파일인 경우 표준화된 이름으로 심볼릭 링크 생성
-            if audio_file_path.lower().endswith('.wav'):
-                converted_file = audio_file_path
-                print(f"   ✅ WAV 파일 원본 사용 (복사 안함)")
-            else:
-                # 오디오 변환
-                converted_file = await self.audio_processor.convert_to_wav(
-                    input_file=audio_file_path,
-                    output_dir=str(self.audio_dir)
-                )
-            
-            logger.info(f"오디오 변환 완료: {converted_file}")
-            return converted_file
+            logger.info(f"오디오 변환 및 이름 표준화 완료: {final_wav_path}")
+            return str(final_wav_path)
             
         except Exception as e:
-            print(f"   ❌ 오디오 변환 실패: {str(e)}")
-            logger.error(f"오디오 변환 실패: {str(e)}")
+            logger.error(f"오디오 변환 실패: {str(e)}", exc_info=True)
             raise
     
-    async def _run_plspp_analysis(self, wav_file_path: str, user_id: str, question_num: int):
-        """PLSPP MFA 분석 실행 (최적화된 버전)"""
+    async def _run_plspp_analysis(self, wav_file_path: str):
+        """PLSPP MFA 분석 실행"""
         try:
             script_path = self.plspp_dir / "plspp_mfa.sh"
             
@@ -314,10 +239,10 @@ class EnglishAnalyzer:
             print(f"   ❌ 경량화된 MFA 분석 오류: {str(e)}")
             return False
     
-    async def _run_fluency_evaluation(self, user_id: str, question_num: int) -> Dict:
+    async def _run_fluency_evaluation(self) -> Dict:
         """유창성 평가 실행 - 특정 사용자/질문에 대해서만"""
         try:
-            print(f"   - 유창성 평가 시작 (사용자 {user_id}, 질문 {question_num})")
+            print(f"   - 유창성 평가 시작 (사용자 {self.user_id}, 질문 {self.question_num})")
             
             # FluencyEvaluator를 직접 import하고 사용
             from fluency_evaluator import FluencyEvaluator
@@ -326,7 +251,7 @@ class EnglishAnalyzer:
             evaluator = FluencyEvaluator()
             
             # 특정 사용자/질문에 해당하는 화자만 평가
-            result = evaluator.evaluate_specific_speaker(user_id, question_num, verbose=True)
+            result = evaluator.evaluate_specific_speaker(self.user_id, self.question_num, verbose=True)
             
             if result and result.get('final_score', 0) > 0:
                 fluency_scores = {
@@ -340,11 +265,11 @@ class EnglishAnalyzer:
                 }
                 matched_speaker = result.get('matched_speaker_id', 'unknown')
                 print(f"   ✅ 유창성 평가 완료: {fluency_scores['final_score']}/30점 (화자: {matched_speaker})")
-                logger.info(f"유창성 평가 완료: 사용자 {user_id}, 질문 {question_num}, 화자 {matched_speaker}")
+                logger.info(f"유창성 평가 완료: 사용자 {self.user_id}, 질문 {self.question_num}, 화자 {matched_speaker}")
                 return fluency_scores
             else:
-                print(f"   ⚠️ 사용자 {user_id}, 질문 {question_num}에 대한 유창성 데이터가 없습니다")
-                logger.warning(f"유창성 평가 데이터 없음: 사용자 {user_id}, 질문 {question_num}")
+                print(f"   ⚠️ 사용자 {self.user_id}, 질문 {self.question_num}에 대한 유창성 데이터가 없습니다")
+                logger.warning(f"유창성 평가 데이터 없음: 사용자 {self.user_id}, 질문 {self.question_num}")
             
             # 데이터 없음 - 0점 반환
             return {
@@ -371,12 +296,12 @@ class EnglishAnalyzer:
                 'final_score': 0.0
             }
     
-    async def _run_cefr_evaluation(self, user_id: str, question_num: int) -> Dict:
+    async def _run_cefr_evaluation(self) -> Dict:
         """CEFR 평가 실행"""
         try:
             # {user_id}_{question_num} 패턴으로 시작하는 모든 텍스트 파일 찾기
             import glob
-            pattern = str(self.text_dir / f"{user_id}_{question_num}*.txt")
+            pattern = str(self.text_dir / f"{self.user_id}_{self.question_num}*.txt")
             matching_files = glob.glob(pattern)
             
             text_file = None
@@ -415,12 +340,12 @@ class EnglishAnalyzer:
             'cefr_score': 0
         }
     
-    async def _extract_stt_text(self, user_id: str, question_num: int) -> str:
+    async def _extract_stt_text(self) -> str:
         """STT 텍스트 추출"""
         try:
             # {user_id}_{question_num} 패턴으로 시작하는 모든 텍스트 파일 찾기
             import glob
-            pattern = str(self.text_dir / f"{user_id}_{question_num}*.txt")
+            pattern = str(self.text_dir / f"{self.user_id}_{self.question_num}*.txt")
             matching_files = glob.glob(pattern)
             
             text_file = None
@@ -470,17 +395,17 @@ class EnglishAnalyzer:
             logger.error(f"GPT 분석 실패: {str(e)}")
             return "분석 실패", {"strength_keywords": "오류", "weakness_keywords": "오류"}, {"strength_keywords": "오류", "weakness_keywords": "오류"}
     
-    async def _save_to_new_tables(self, user_id: str, question_num: int, ans_summary: str,
+    async def _save_to_new_tables(self, ans_summary: str,
                                  fluency_scores: Dict, cefr_scores: Dict, 
                                  fluency_keywords: Dict, grammar_keywords: Dict):
         """새로운 테이블 구조로 저장"""
         try:
             # 1. answer_score 테이블에 저장
-            await self.db_manager.save_answer_score(user_id, question_num, ans_summary)
+            await self.db_manager.save_answer_score(self.user_id, self.question_num, ans_summary)
             
             # 2. answer_category_result 테이블에 영어 유창성 결과 저장
             await self.db_manager.save_answer_category_result(
-                user_id, question_num, 
+                self.user_id, self.question_num, 
                 EvalCategory.ENGLISH_FLUENCY,
                 fluency_scores.get('final_score', 0),
                 fluency_keywords.get('strength_keywords', ''),
@@ -489,20 +414,20 @@ class EnglishAnalyzer:
             
             # 3. answer_category_result 테이블에 영어 문법 결과 저장
             await self.db_manager.save_answer_category_result(
-                user_id, question_num,
+                self.user_id, self.question_num,
                 EvalCategory.ENGLISH_GRAMMAR,
                 cefr_scores.get('cefr_score', 0),
                 grammar_keywords.get('strength_keywords', ''),
                 grammar_keywords.get('weakness_keywords', '')
             )
             
-            logger.info(f"새 테이블 구조 저장 완료: 사용자 {user_id}, 질문 {question_num}")
+            logger.info(f"새 테이블 구조 저장 완료: 사용자 {self.user_id}, 질문 {self.question_num}")
             
         except Exception as e:
             logger.error(f"새 테이블 구조 저장 실패: {str(e)}")
             raise
     
-    async def _save_to_mongodb(self, user_id: str, question_num: int, fluency_scores: Dict, cefr_scores: Dict,
+    async def _save_to_mongodb(self, fluency_scores: Dict, cefr_scores: Dict,
                               text_content: str, ans_summary: str, fluency_keywords: Dict, grammar_keywords: Dict):
         """MongoDB에 상세 결과 저장"""
         try:
@@ -510,8 +435,8 @@ class EnglishAnalyzer:
             total_score = fluency_scores.get('final_score', 0) + cefr_scores.get('cefr_score', 0)
             
             analysis_data = {
-                "userId": user_id,
-                "question_num": question_num,
+                "userId": self.user_id,
+                "question_num": self.question_num,
                 "pause_score": fluency_scores.get('pause_score', 0),
                 "speed_score": fluency_scores.get('speed_score', 0),
                 "f0_score": fluency_scores.get('f0_score', 0),
@@ -534,24 +459,11 @@ class EnglishAnalyzer:
             }
             
             await self.db_manager.save_to_mongodb(analysis_data)
-            logger.info(f"MongoDB 저장 완료: 사용자 {user_id}, 질문 {question_num}")
+            logger.info(f"MongoDB 저장 완료: 사용자 {self.user_id}, 질문 {self.question_num}")
             
         except Exception as e:
             logger.error(f"MongoDB 저장 실패: {str(e)}")
             raise
-    
-    async def _cleanup_temp_files(self, user_id: str, question_num: int):
-        """임시 파일 정리"""
-        try:
-            # 결과 JSON 파일 삭제
-            result_file = self.project_root / f"fluency_evaluation_results_{user_id}_{question_num}.json"
-            if result_file.exists():
-                result_file.unlink()
-                
-            logger.info("임시 파일 정리 완료")
-            
-        except Exception as e:
-            logger.warning(f"임시 파일 정리 실패: {str(e)}")
     
     async def get_analysis_result(self, user_id: str, question_num: int) -> Optional[Dict]:
         """분석 결과 조회"""
@@ -586,7 +498,7 @@ class EnglishAnalyzer:
             audio_file_path = await self._download_audio_from_s3(user_id, question_num)
             
             # 2. 오디오 파일 변환 (webm -> wav)
-            wav_file_path = await self._convert_audio_to_wav(audio_file_path, user_id, question_num)
+            wav_file_path = await self._convert_audio_to_wav(audio_file_path)
             
             logger.info(f"오디오 파일 준비 완료: {user_id}_{question_num}")
             
@@ -670,13 +582,13 @@ class EnglishAnalyzer:
                 self.db_manager = await get_db_manager()
             
             # 4. 유창성 평가 실행 (CSV 데이터 기반)
-            fluency_scores = await self._run_fluency_evaluation(user_id, question_num)
+            fluency_scores = await self._run_fluency_evaluation()
             
             # 5. STT 텍스트 추출 및 CEFR 문법 평가
-            cefr_scores = await self._run_cefr_evaluation(user_id, question_num)
+            cefr_scores = await self._run_cefr_evaluation()
             
             # 6. STT 텍스트 추출
-            text_content = await self._extract_stt_text(user_id, question_num)
+            text_content = await self._extract_stt_text()
             
             # 7. GPT 분석 (요약, 키워드 추출)
             ans_summary, fluency_keywords, grammar_keywords = await self._run_gpt_analysis(
@@ -684,13 +596,12 @@ class EnglishAnalyzer:
             )
             
             # 8. 새로운 테이블 구조로 저장
-            await self._save_to_new_tables(user_id, question_num, ans_summary, 
-                                          fluency_scores, cefr_scores, 
+            await self._save_to_new_tables(ans_summary, fluency_scores, cefr_scores, 
                                           fluency_keywords, grammar_keywords)
             
             # 9. MongoDB에 상세 결과 저장
-            await self._save_to_mongodb(user_id, question_num, fluency_scores, cefr_scores, 
-                                      text_content, ans_summary, fluency_keywords, grammar_keywords)
+            await self._save_to_mongodb(fluency_scores, cefr_scores, text_content, 
+                                      ans_summary, fluency_keywords, grammar_keywords)
             
             # 총점 계산
             total_score = fluency_scores.get('final_score', 0) + cefr_scores.get('cefr_score', 0)
