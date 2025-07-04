@@ -170,8 +170,8 @@ class DatabaseManager:
             ans_cat_result_id = int(f"{user_id}0{question_num}")
             ans_score_id = int(f"{user_id}0{question_num}")
             
-            # 카테고리별로 고유한 ID 생성 (영어 유창성: 1, 영어 문법: 2)
-            category_suffix = "1" if eval_cat_cd == "ENGLISH_FLUENCY" else "2"
+            # 카테고리별로 고유한 ID 생성 (영어 유창성: 6, 영어 문법: 7)
+            category_suffix = "6" if eval_cat_cd == "ENGLISH_FLUENCY" else "7"
             ans_cat_result_id = int(f"{user_id}0{question_num}{category_suffix}")
             
             with connection.cursor() as cursor:
