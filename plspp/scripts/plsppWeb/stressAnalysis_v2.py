@@ -88,7 +88,7 @@ for file in os.listdir(input_folder):
     pitch = sound.to_pitch()
     PitchTier = call(pitch, "Down to PitchTier")
 
-    spk = re.sub(r"(_\d+)?\.TextGrid","",file)
+    spk = re.sub(r"\.TextGrid$","",file)  # 수정: .TextGrid 확장자만 제거하여 전체 파일명 유지 (예: 2_9.TextGrid -> 2_9)
     nbWplurisyll = 0
     nbWsyll = 0
 

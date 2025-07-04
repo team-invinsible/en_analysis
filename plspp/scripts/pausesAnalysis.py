@@ -43,7 +43,7 @@ for file in os.listdir(posShape_folder):
     #tg = call("Read from file...", input_folder+file)    # LIGNE A SUPPRIMER?
     lenWor = len(grid['POS'])
     fileNameNoExt = file.replace('.TextGrid', '')
-    spk = re.sub(r"_\d+$","",fileNameNoExt)
+    spk = fileNameNoExt  # 수정: 전체 파일명을 화자 ID로 사용 (예: 2_9)
 
 
     # READ INPUT BENEPAR FILE

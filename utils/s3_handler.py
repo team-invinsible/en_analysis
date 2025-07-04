@@ -24,7 +24,20 @@ class S3Handler:
         (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
         """
         try:
-            self.s3_client = boto3.client('s3', region_name=region_name)
+            # 환경변수에서 AWS 자격 증명 가져오기
+            aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+            aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            aws_region = os.getenv('AWS_DEFAULT_REGION', region_name)
+            
+            if not aws_access_key_id or not aws_secret_access_key:
+                raise NoCredentialsError("AWS_ACCESS_KEY_ID 또는 AWS_SECRET_ACCESS_KEY 환경변수가 설정되지 않았습니다.")
+            
+            self.s3_client = boto3.client(
+                's3',
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=aws_region
+            )
             self.bucket_name = os.getenv('S3_BUCKET_NAME', 'skala25a')
             if not self.bucket_name:
                 raise ValueError("S3_BUCKET_NAME 환경변수가 설정되지 않았습니다.")

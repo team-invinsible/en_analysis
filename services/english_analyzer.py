@@ -34,20 +34,20 @@ class EnglishAnalyzer:
         self.db_manager = None
         self.audio_processor = AudioProcessor()
         
-        # PLSPP 관련 디렉토리 구조를 base_path 내에 동적으로 생성
+        # PLSPP 관련 디렉토리 구조 - 프로젝트 실제 디렉토리 사용
         self.project_root = Path(__file__).parent.parent
-        self.original_plspp_dir = self.project_root / "plspp" # 원본 위치
-        self.plspp_dir = self.base_path / "plspp"             # 작업용 복사본 위치
-        self.audio_dir = self.plspp_dir / "audio"
-        self.text_dir = self.plspp_dir / "text"
+        self.plspp_dir = self.project_root / "plspp"        # 실제 프로젝트 plspp 디렉토리 사용
+        self.audio_dir = self.plspp_dir / "audio"           # 실제 plspp/audio 디렉토리
+        self.text_dir = self.plspp_dir / "text"             # 실제 plspp/text 디렉토리
         
-        # 작업용 디렉토리 생성
+        # 필요한 디렉토리 생성
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.text_dir.mkdir(parents=True, exist_ok=True)
-
-        # 원본 plspp 파일을 작업 디렉토리로 복사
-        if not (self.plspp_dir / "plspp_mfa.sh").exists():
-            shutil.copytree(self.original_plspp_dir, self.plspp_dir, dirs_exist_ok=True)
+        
+        print(f"   프로젝트 루트: {self.project_root}")
+        print(f"   PLSPP 디렉토리: {self.plspp_dir}")
+        print(f"   오디오 디렉토리: {self.audio_dir}")
+        print(f"   텍스트 디렉토리: {self.text_dir}")
 
     async def analyze(self, audio_file_path: str):
         """
@@ -101,26 +101,55 @@ class EnglishAnalyzer:
     async def _convert_audio_to_wav(self, audio_file_path: str) -> str:
         """오디오 파일을 WAV 형식으로 변환하고 표준화된 이름으로 변경"""
         try:
-            # 1. 오디오 변환 (AudioProcessor는 입력 파일명 기반으로 .wav를 생성)
-            temp_converted_file = await self.audio_processor.convert_to_wav(
-                input_file=audio_file_path,
-                output_dir=str(self.audio_dir)
-            )
-
-            if not temp_converted_file:
-                raise Exception("오디오 파일 변환에 실패했습니다.")
-
-            # 2. 변환된 파일의 이름을 표준 형식으로 변경
-            # 예: "en_j.wav" -> "2_8.wav"
+            # 0. 기존 오디오 파일들 삭제 (새 분석을 위해)
+            if self.audio_dir.exists():
+                import glob
+                audio_files = glob.glob(str(self.audio_dir / "*"))
+                for audio_file in audio_files:
+                    try:
+                        os.remove(audio_file)
+                        print(f"   🗑️ 기존 오디오 파일 삭제: {os.path.basename(audio_file)}")
+                    except Exception as e:
+                        print(f"   ⚠️ 파일 삭제 실패: {audio_file} - {e}")
+                if audio_files:
+                    print(f"   🗑️ audio 폴더 내 파일들 삭제 완료 ({len(audio_files)}개 파일)")
+            
+            # 1. 파일이 WAV인지 확인하고 직접 복사
             final_wav_name = f"{self.user_id}_{self.question_num}.wav"
             final_wav_path = self.audio_dir / final_wav_name
-
-            # 만약 변환된 파일 경로가 최종 경로와 다르다면 이름 변경
-            if str(final_wav_path) != temp_converted_file:
-                shutil.move(temp_converted_file, final_wav_path)
             
-            logger.info(f"오디오 변환 및 이름 표준화 완료: {final_wav_path}")
-            return str(final_wav_path)
+            print(f"   원본 파일 경로: {audio_file_path}")
+            print(f"   대상 audio 디렉토리: {self.audio_dir}")
+            print(f"   최종 파일 경로: {final_wav_path}")
+
+            if audio_file_path.lower().endswith('.wav'):
+                # WAV 파일인 경우 직접 복사
+                print(f"   WAV 파일 직접 복사: {audio_file_path} → {final_wav_path}")
+                shutil.copy2(audio_file_path, final_wav_path)
+            else:
+                # 다른 형식인 경우 AudioProcessor로 변환
+                print(f"   🔄 오디오 형식 변환 필요")
+                temp_converted_file = await self.audio_processor.convert_to_wav(
+                    input_file=audio_file_path,
+                    output_dir=str(self.audio_dir)
+                )
+
+                if not temp_converted_file:
+                    raise Exception("오디오 파일 변환에 실패했습니다.")
+                
+                # 변환된 파일을 최종 경로로 이동
+                if str(final_wav_path) != temp_converted_file:
+                    print(f"   🔄 변환된 파일 이동: {temp_converted_file} → {final_wav_path}")
+                    shutil.move(temp_converted_file, final_wav_path)
+            
+            # 파일이 실제로 존재하는지 확인
+            if final_wav_path.exists():
+                file_size = final_wav_path.stat().st_size
+                print(f"   ✅ 오디오 파일 생성 확인: {final_wav_path.name} ({file_size} bytes)")
+                logger.info(f"오디오 변환 및 이름 표준화 완료: {final_wav_path}")
+                return str(final_wav_path)
+            else:
+                raise Exception(f"변환된 파일이 존재하지 않습니다: {final_wav_path}")
             
         except Exception as e:
             logger.error(f"오디오 변환 실패: {str(e)}", exc_info=True)
@@ -150,21 +179,14 @@ class EnglishAnalyzer:
                     csv_file.unlink()
                     print(f"   🗑️ 기존 CSV 파일 삭제: {csv_file.name}")
             
-            # plspp/audio 폴더 안의 모든 파일들만 삭제 (폴더는 유지)
-            audio_dir = self.plspp_dir / "audio"
-            if audio_dir.exists():
-                import glob
-                audio_files = glob.glob(str(audio_dir / "*"))
-                for audio_file in audio_files:
-                    try:
-                        os.remove(audio_file)
-                        print(f"   🗑️ 기존 오디오 파일 삭제: {os.path.basename(audio_file)}")
-                    except Exception as e:
-                        print(f"   ⚠️ 파일 삭제 실패: {audio_file} - {e}")
-                if audio_files:
-                    print(f"   🗑️ audio 폴더 내 파일들 삭제 완료 ({len(audio_files)}개 파일)")
             
-            print("   🔄 새로운 PLSPP 분석 시작")
+            # 오디오 파일 존재 확인
+            audio_files = list(self.audio_dir.glob("*.wav"))
+            if not audio_files:
+                raise Exception(f"audio 디렉토리에 WAV 파일이 없습니다: {self.audio_dir}")
+            
+            print(f"   분석할 오디오 파일: {[f.name for f in audio_files]}")
+            print("   새로운 PLSPP 분석 시작")
             
             # MFA 분석 실행
             print(f"   - 실행 명령: cd '{self.plspp_dir}' && bash plspp_mfa.sh")
@@ -178,17 +200,17 @@ class EnglishAnalyzer:
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
-                print("   ✅ PLSPP MFA 스크립트 실행 성공")
+                print("   PLSPP MFA 스크립트 실행 성공")
                 logger.info("PLSPP MFA 분석 완료")
             else:
                 error_output = stderr.decode('utf-8', errors='ignore')
-                print(f"   ⚠️ PLSPP MFA 스크립트 실행 경고: {process.returncode}")
+                print(f"   PLSPP MFA 스크립트 실행 경고: {process.returncode}")
                 if error_output:
                     print(f"   오류 상세: {error_output[:200]}...")  # 처음 200자만 표시
                 logger.warning(f"PLSPP MFA 실행 경고: {process.returncode}")
             
         except Exception as e:
-            print(f"   ❌ PLSPP MFA 분석 실패: {str(e)}")
+            print(f"   PLSPP MFA 분석 실패: {str(e)}")
             logger.error(f"PLSPP MFA 분석 실패: {str(e)}")
             raise
     
@@ -229,14 +251,14 @@ class EnglishAnalyzer:
             result = subprocess.run(cmd, env=env, capture_output=True, text=True)
             
             if result.returncode == 0:
-                print("   ✅ 경량화된 MFA 분석 완료")
+                print("   경량화된 MFA 분석 완료")
                 return True
             else:
-                print(f"   ❌ 경량화된 MFA 실패: {result.stderr}")
+                print(f"   경량화된 MFA 실패: {result.stderr}")
                 return False
                 
         except Exception as e:
-            print(f"   ❌ 경량화된 MFA 분석 오류: {str(e)}")
+            print(f"   경량화된 MFA 분석 오류: {str(e)}")
             return False
     
     async def _run_fluency_evaluation(self) -> Dict:
