@@ -191,7 +191,7 @@ class EnglishAnalyzer:
             
             # MFA 분석 실행
             print(f"   - 실행 명령: cd '{self.plspp_dir}' && bash plspp_mfa.sh")
-            print(f"   - 분석 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"   - 분석 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
             process = await asyncio.create_subprocess_shell(
                 f"cd '{self.plspp_dir}' && bash plspp_mfa.sh",
