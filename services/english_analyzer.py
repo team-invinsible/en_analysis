@@ -6,6 +6,7 @@ import tempfile
 import shutil
 from typing import Dict, Optional, List, Any
 from pathlib import Path
+from datetime import datetime
 
 from services.s3_service import S3Service
 from services.gpt_service import GPTService
@@ -190,6 +191,7 @@ class EnglishAnalyzer:
             
             # MFA 분석 실행
             print(f"   - 실행 명령: cd '{self.plspp_dir}' && bash plspp_mfa.sh")
+            logger.info(f"   - 분석 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
             process = await asyncio.create_subprocess_shell(
                 f"cd '{self.plspp_dir}' && bash plspp_mfa.sh",
@@ -197,17 +199,40 @@ class EnglishAnalyzer:
                 stderr=asyncio.subprocess.PIPE
             )
             
+            print("   - PLSPP MFA 스크립트 실행 중... (완료까지 대기)")
             stdout, stderr = await process.communicate()
+            print(f"   - 분석 완료 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # 출력 내용 확인
+            stdout_text = stdout.decode('utf-8', errors='ignore') if stdout else ""
+            stderr_text = stderr.decode('utf-8', errors='ignore') if stderr else ""
             
             if process.returncode == 0:
-                print("   PLSPP MFA 스크립트 실행 성공")
+                print("   ✅ PLSPP MFA 스크립트 실행 성공")
+                if stdout_text:
+                    print(f"   📄 스크립트 출력 (마지막 200자): ...{stdout_text[-200:]}")
                 logger.info("PLSPP MFA 분석 완료")
             else:
-                error_output = stderr.decode('utf-8', errors='ignore')
-                print(f"   PLSPP MFA 스크립트 실행 경고: {process.returncode}")
-                if error_output:
-                    print(f"   오류 상세: {error_output[:200]}...")  # 처음 200자만 표시
-                logger.warning(f"PLSPP MFA 실행 경고: {process.returncode}")
+                logger.error(f"   ❌ PLSPP MFA 스크립트 실행 실패: 종료 코드 {process.returncode}")
+                if stderr_text:
+                    print(f"   🚨 오류 상세 (처음 300자): {stderr_text[:300]}...")
+                if stdout_text:
+                    print(f"   📄 표준 출력 (마지막 200자): ...{stdout_text[-200:]}")
+                logger.error(f"PLSPP MFA 실행 실패: 종료 코드 {process.returncode}")
+                
+            # 분석 결과 파일들 확인
+            result_files = [
+                self.plspp_dir / "stressTable.csv",
+                self.plspp_dir / "pauseTable.csv",
+                self.plspp_dir / "speakers.csv",
+                self.plspp_dir / "nbWords_perSpeaker.csv"
+            ]
+            
+            existing_files = [f.name for f in result_files if f.exists()]
+            if existing_files:
+                print(f"   📊 생성된 결과 파일들: {existing_files}")
+            else:
+                print("   ⚠️ 예상된 결과 파일들이 생성되지 않았습니다")
             
         except Exception as e:
             print(f"   PLSPP MFA 분석 실패: {str(e)}")

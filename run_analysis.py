@@ -7,7 +7,7 @@
 # ----------------------------------------------------------------------------------------------------
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import sys
 from pathlib import Path
@@ -40,6 +40,8 @@ class AnalysisResponse(BaseModel):
     analysis_id: str
     status: str
     message: str
+    user_id: str
+    question_num: int
 
 # --- FastAPI 애플리케이션 생성 ---
 app = FastAPI(
@@ -55,8 +57,8 @@ def parse_s3_key(s3_key: str) -> tuple[str, str]:
     """
     try:
         parts = Path(s3_key).parts
-        # 경로 구조 예: ('team12', 'interview_audio', '2', '2', 'TalkFile.wav')
-        if len(parts) < 4 or parts[0].lower() != 'team12' or parts[1].lower() != 'interview_audio':
+        # 경로 구조 예: ('team12', 'interview_audio', '2', '2', 'TalkFile.wav') 또는 ('team12', 'interview_video', '2', '2', 'video.webm')
+        if len(parts) < 4 or parts[0].lower() != 'team12' or parts[1].lower() not in ['interview_audio', 'interview_video']:
              raise ValueError("잘못된 S3 키 구조")
         
         user_id = parts[2]
@@ -64,31 +66,28 @@ def parse_s3_key(s3_key: str) -> tuple[str, str]:
         
         return user_id, question_num
     except (IndexError, ValueError) as e:
-        logger.error(f"S3 키 형식 분석 실패: {s3_key}. 예상 형식: 'team12/interview_audio/{{user_id}}/{{question_num}}/filename' - {e}")
+        logger.error(f"S3 키 형식 분석 실패: {s3_key}. 예상 형식: 'team12/interview_audio(또는 interview_video)/{{user_id}}/{{question_num}}/filename' - {e}")
         raise ValueError(f"잘못된 S3 키 형식입니다: {s3_key}")
 
-# --- 백그라운드 처리 함수 ---
-async def process_english_analysis_from_s3(background_tasks: BackgroundTasks, s3_key: str):
-    """S3 키를 받아 영어 분석을 비동기적으로 처리하는 함수"""
-    background_tasks.add_task(run_analysis_in_background, s3_key)
-    return {"message": "English analysis has been started in the background."}
-
-async def run_analysis_in_background(s3_key: str):
-    """백그라운드에서 실제 분석을 실행하는 함수"""
+# --- 분석 처리 함수 ---
+async def run_analysis(s3_key: str):
+    """S3 키를 받아 영어 분석을 실행하는 함수"""
     logger.info(f"Received S3 key for analysis: {s3_key}")
     s3_handler = S3Handler()
     
     # s3_key에서 정보 파싱
     try:
-        # "team12/interview_audio/{user_id}/{question_num}/{filename}"
+        # "team12/interview_audio/{user_id}/{question_num}/{filename}" 또는 "team12/interview_video/{user_id}/{question_num}/{filename}"
         parts = s3_key.split('/')
+        if len(parts) < 5 or parts[0] != 'team12' or parts[1] not in ['interview_audio', 'interview_video']:
+            raise ValueError(f"잘못된 S3 키 형식: {s3_key}")
         user_id = parts[2]
         question_num = int(parts[3])
         filename = parts[4]
         logger.info(f"Parsed info: user_id={user_id}, question_num={question_num}, filename={filename}")
     except (IndexError, ValueError) as e:
         logger.error(f"Failed to parse S3 key '{s3_key}'. Error: {e}", exc_info=True)
-        return
+        raise HTTPException(status_code=400, detail=f"S3 키 형식 파싱 실패: {e}")
 
     # 분석을 위한 임시 작업 디렉토리 생성
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -100,7 +99,7 @@ async def run_analysis_in_background(s3_key: str):
             
             if not local_audio_path:
                 logger.error(f"Failed to download file from S3 for key: {s3_key}")
-                return
+                raise HTTPException(status_code=404, detail="S3에서 파일 다운로드 실패")
             
             logger.info(f"File downloaded successfully to: {local_audio_path}")
             
@@ -115,25 +114,39 @@ async def run_analysis_in_background(s3_key: str):
             
             logger.info(f"Starting analysis for {local_audio_path}...")
             # 다운로드한 파일 경로를 analyze 메서드에 전달
-            await analyzer.analyze(local_audio_path)
+            analysis_result = await analyzer.analyze(local_audio_path)
             
             logger.info(f"Successfully completed analysis for S3 key: {s3_key}")
+            
+            # 분석이 실제로 완료되었는지 확인
+            if analysis_result is None:
+                logger.info(f"Analysis completed successfully for user {user_id}, question {question_num}")
+                return {
+                    "analysis_id": f"{user_id}_{question_num}",
+                    "status": "completed",
+                    "message": "영어 분석이 성공적으로 완료되었습니다.",
+                    "user_id": user_id,
+                    "question_num": question_num
+                }
+            else:
+                logger.error(f"Analysis returned unexpected result: {analysis_result}")
+                raise HTTPException(status_code=500, detail="분석 완료 상태 확인 실패")
 
         except Exception as e:
             logger.error(f"An error occurred during the analysis for S3 key '{s3_key}'. Error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"분석 처리 중 오류 발생: {e}")
         finally:
             logger.info(f"Cleaning up temporary directory: {temp_dir_path}")
             # 'with' 구문이 끝나면 temp_dir은 자동으로 삭제됩니다.
 
 # --- API 엔드포인트 ---
-@app.post("/analysis/english")
+@app.post("/analysis/english", response_model=AnalysisResponse)
 async def request_english_analysis(
     request: AnalysisPayload,
-    background_tasks: BackgroundTasks,
 ):
     """영어 면접 답변에 대한 분석을 요청하는 엔드포인트 (s3ObjectKey 사용)"""
     logger.info(f"Received english analysis request for S3 key: {request.s3ObjectKey}")
-    return await process_english_analysis_from_s3(background_tasks, request.s3ObjectKey)
+    return await run_analysis(request.s3ObjectKey)
 
 @app.get("/health")
 async def health_check():
