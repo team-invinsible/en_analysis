@@ -213,7 +213,7 @@ class EnglishAnalyzer:
                     print(f"   📄 스크립트 출력 (마지막 200자): ...{stdout_text[-200:]}")
                 logger.info("PLSPP MFA 분석 완료")
             else:
-                print(f"   ❌ PLSPP MFA 스크립트 실행 실패: 종료 코드 {process.returncode}")
+                logger.error(f"   ❌ PLSPP MFA 스크립트 실행 실패: 종료 코드 {process.returncode}")
                 if stderr_text:
                     print(f"   🚨 오류 상세 (처음 300자): {stderr_text[:300]}...")
                 if stdout_text:
