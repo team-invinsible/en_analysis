@@ -1,3 +1,12 @@
+# ----------------------------------------------------------------------------------------------------
+# 작성목적 : 몽고DB 및 MariaDB 연결 관리
+# 작성일 : 2025-05-31
+
+# 변경사항 내역 (날짜 | 변경목적 | 변경내용 | 작성자 순으로 기입)
+# 2025-05-31 | 최초 구현 | FastAPI 베스트 프랙티스에 따른 구조로 재구성 | 구동빈
+# 2025-12-30 | 몽고DB 연결 개선 | 몽고DB 연결 불가시 저장 작업 스킵하도록 수정 | 구동빈
+# ----------------------------------------------------------------------------------------------------
+
 import motor.motor_asyncio
 import pymysql
 import asyncio
@@ -16,10 +25,12 @@ class DatabaseManager:
         self.mongo_client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
         self.mongo_db = None
         self.en_analysis_collection = None
+        self.mongodb_available = False  # MongoDB 사용 가능 여부 플래그
         
         # MariaDB 설정
         self.maria_pool = None
         self.maria_config = None
+        self.mariadb_available = False  # MariaDB 사용 가능 여부 플래그
         
     async def init_mongodb(self):
         """MongoDB 연결 초기화"""
@@ -36,11 +47,13 @@ class DatabaseManager:
             self.mongo_db = self.mongo_client.audio
             self.en_analysis_collection = self.mongo_db.video_analysis.en_analysis
             
+            self.mongodb_available = True
             logger.info("MongoDB 연결 성공")
             
         except Exception as e:
-            logger.error(f"MongoDB 연결 실패: {str(e)}")
-            raise
+            logger.warning(f"MongoDB 연결 실패, MongoDB 저장 기능이 비활성화됩니다: {str(e)}")
+            self.mongodb_available = False
+            # 예외를 발생시키지 않고 계속 진행
     
     async def init_mariadb(self):
         """MariaDB 연결 초기화"""
@@ -98,15 +111,21 @@ class DatabaseManager:
             
             # 연결 풀은 실제 사용할 때 생성
             self.maria_config = db_config
+            self.mariadb_available = True
             
             logger.info("MariaDB 연결 및 새 테이블 구조 설정 완료")
             
         except Exception as e:
-            logger.error(f"MariaDB 연결 실패: {str(e)}")
-            raise
+            logger.warning(f"MariaDB 연결 실패, MariaDB 저장 기능이 비활성화됩니다: {str(e)}")
+            self.mariadb_available = False
+            # 예외를 발생시키지 않고 계속 진행
     
     async def save_to_mongodb(self, analysis_data: dict):
         """MongoDB에 분석 결과 저장"""
+        if not self.mongodb_available:
+            logger.warning("MongoDB가 사용 불가능합니다. MongoDB 저장을 스킵합니다.")
+            return None
+            
         try:
             # ID 설정 (userId_questionNum 형식)
             document_id = f"{analysis_data['userId']}_{analysis_data['question_num']}"
@@ -128,10 +147,15 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"MongoDB 저장 실패: {str(e)}")
-            raise
+            # 저장 실패 시에도 프로세스를 중단하지 않고 None 반환
+            return None
     
     async def save_answer_score(self, user_id: str, question_num: int, ans_summary: str):
         """answer_score 테이블에 저장"""
+        if not self.mariadb_available:
+            logger.warning("MariaDB가 사용 불가능합니다. answer_score 저장을 스킵합니다.")
+            return None
+            
         try:
             connection = pymysql.connect(**self.maria_config)
             
@@ -157,12 +181,16 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"answer_score 저장 실패: {str(e)}")
-            raise
+            # 저장 실패 시에도 프로세스를 중단하지 않음
     
     async def save_answer_category_result(self, user_id: str, question_num: int, 
                                         eval_cat_cd: str, score: float, 
                                         strength_keyword: str, weakness_keyword: str):
         """answer_category_result 테이블에 저장"""
+        if not self.mariadb_available:
+            logger.warning("MariaDB가 사용 불가능합니다. answer_category_result 저장을 스킵합니다.")
+            return None
+            
         try:
             connection = pymysql.connect(**self.maria_config)
             
@@ -195,10 +223,14 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"answer_category_result 저장 실패: {str(e)}")
-            raise
+            # 저장 실패 시에도 프로세스를 중단하지 않음
 
     async def get_from_mongodb(self, user_id: str, question_num: int) -> Optional[dict]:
         """MongoDB에서 분석 결과 조회"""
+        if not self.mongodb_available:
+            logger.warning("MongoDB가 사용 불가능합니다. 조회를 스킵합니다.")
+            return None
+            
         try:
             result = await self.en_analysis_collection.find_one({
                 "userId": user_id,
@@ -208,10 +240,14 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"MongoDB 조회 실패: {str(e)}")
-            raise
+            return None
     
     async def get_user_all_results(self, user_id: str) -> list:
         """특정 사용자의 모든 분석 결과 조회"""
+        if not self.mongodb_available:
+            logger.warning("MongoDB가 사용 불가능합니다. 조회를 스킵합니다.")
+            return []
+            
         try:
             cursor = self.en_analysis_collection.find({"userId": user_id})
             results = await cursor.to_list(length=None)
@@ -219,7 +255,7 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"MongoDB 전체 결과 조회 실패: {str(e)}")
-            raise
+            return []
 
     async def close(self):
         """데이터베이스 연결 종료"""
@@ -233,8 +269,22 @@ async def init_databases():
     """데이터베이스 초기화"""
     global _db_manager
     _db_manager = DatabaseManager()
+    
+    # MongoDB와 MariaDB 모두 초기화 시도 (실패해도 계속 진행)
     await _db_manager.init_mongodb()
     await _db_manager.init_mariadb()
+    
+    # 사용 가능한 데이터베이스 상태 로깅
+    available_dbs = []
+    if _db_manager.mongodb_available:
+        available_dbs.append("MongoDB")
+    if _db_manager.mariadb_available:
+        available_dbs.append("MariaDB")
+    
+    if available_dbs:
+        logger.info(f"사용 가능한 데이터베이스: {', '.join(available_dbs)}")
+    else:
+        logger.warning("사용 가능한 데이터베이스가 없습니다. 분석은 실행되지만 저장되지 않습니다.")
 
 async def get_db_manager() -> DatabaseManager:
     """데이터베이스 관리자 인스턴스 반환"""

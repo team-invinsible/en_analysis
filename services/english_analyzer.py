@@ -471,8 +471,8 @@ class EnglishAnalyzer:
             logger.info(f"새 테이블 구조 저장 완료: 사용자 {self.user_id}, 질문 {self.question_num}")
             
         except Exception as e:
-            logger.error(f"새 테이블 구조 저장 실패: {str(e)}")
-            raise
+            logger.warning(f"새 테이블 구조 저장 중 오류 발생, 계속 진행합니다: {str(e)}")
+            # 예외를 발생시키지 않고 계속 진행
     
     async def _save_to_mongodb(self, fluency_scores: Dict, cefr_scores: Dict,
                               text_content: str, ans_summary: str, fluency_keywords: Dict, grammar_keywords: Dict):
@@ -505,12 +505,15 @@ class EnglishAnalyzer:
                 "grammar_keywords": grammar_keywords
             }
             
-            await self.db_manager.save_to_mongodb(analysis_data)
-            logger.info(f"MongoDB 저장 완료: 사용자 {self.user_id}, 질문 {self.question_num}")
+            result = await self.db_manager.save_to_mongodb(analysis_data)
+            if result:
+                logger.info(f"MongoDB 저장 완료: 사용자 {self.user_id}, 질문 {self.question_num}")
+            else:
+                logger.warning(f"MongoDB 저장 스킵됨: 사용자 {self.user_id}, 질문 {self.question_num}")
             
         except Exception as e:
-            logger.error(f"MongoDB 저장 실패: {str(e)}")
-            raise
+            logger.warning(f"MongoDB 저장 중 오류 발생, 계속 진행합니다: {str(e)}")
+            # 예외를 발생시키지 않고 계속 진행
     
     async def get_analysis_result(self, user_id: str, question_num: int) -> Optional[Dict]:
         """분석 결과 조회"""

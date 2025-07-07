@@ -48,7 +48,7 @@ class GPTService:
             prompt = prompt_data["prompt_template"].format(text_content=text_content)
             
             response = self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4",
                 messages=[
                     {"role": "system", "content": "당신은 영어 면접 답변 분석 전문가입니다."},
                     {"role": "user", "content": prompt}
